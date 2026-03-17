@@ -1,10 +1,11 @@
 // ---------------------------------------------------------------
 //  Vercel serverless function – Monday.com webhook receiver
-//  Queues tasks into GitHub Issues for the local agent (Shula)
+//  Queues tasks into GitHub Issues AND alerts Discord immediately
 // ---------------------------------------------------------------
 
 const GITHUB_TOKEN = (process.env.GITHUB_TOKEN || "").trim();
 const GITHUB_REPO  = (process.env.GITHUB_REPO || "ShulaZange/monday-webhook-vercel").trim();
+const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || "").trim();
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -26,7 +27,7 @@ export default async function handler(req, res) {
 
   console.log(`🔔 Webhook received! Queueing to GitHub -> Board: ${boardId}, Item: ${itemId}`);
 
-  // ---- 3️⃣ Push this info to GitHub Issues (so Shula can pick it up via cron/polling) ----
+  // ---- 3️⃣ Push this info to GitHub Issues (as a permanent queue) ----
   if (GITHUB_TOKEN) {
     const issueTitle = `Process Monday Item: ${itemId}`;
     const issueBody  = `**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n**Event Type:** ${event.type || 'create_item'}\n\n*This issue serves as a queue item. The local agent should process this item and then close this issue.*`;
@@ -55,13 +56,32 @@ export default async function handler(req, res) {
     } catch (err) {
       console.error('❌ Error hitting GitHub API:', err);
     }
-  } else {
-    console.error('⚠️ GITHUB_TOKEN is missing. Cannot save the info to GitHub.');
+  }
+
+  // ---- 4️⃣ Ping Discord IMMEDIATELY to wake up the local agent ----
+  if (DISCORD_WEBHOOK_URL) {
+    const message = `🚨 **New Monday.com Ticket Queued!**\nHey Shula, please process this item immediately:\n**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n(I also created a GitHub issue as a backup queue.)`;
+
+    try {
+      const discordResp = await fetch(DISCORD_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: message }),
+      });
+
+      if (!discordResp.ok) {
+        console.error('❌ Failed to push to Discord:', await discordResp.text());
+      } else {
+        console.log(`✅ Successfully pinged Discord to wake up agent`);
+      }
+    } catch (err) {
+      console.error('❌ Error hitting Discord API:', err);
+    }
   }
 
   return res.status(200).json({ 
     received: true, 
-    message: "Info extracted and sent to GitHub queue", 
+    message: "Info queued in GitHub and pinged to Discord", 
     boardId, 
     itemId 
   });
