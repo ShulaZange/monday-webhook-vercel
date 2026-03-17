@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/monday.js": {
+      "runtime": "nodejs18.x"
+    }
+  }
+}
