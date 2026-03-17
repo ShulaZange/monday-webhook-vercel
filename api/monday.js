@@ -3,17 +3,17 @@
 // ---------------------------------------------------------------
 
 // ---- CONFIG ----
-const MONDAY_API_KEY   = process.env.MONDAY_API_KEY;
-const IN_PROGRESS_LABEL = process.env.IN_PROGRESS_LABEL || "In Bearbeitung";
-const UPDATE_TEXT      = process.env.UPDATE_TEXT || "I’ve started working on this ticket.";
-const STATUS_COL_TITLE = process.env.STATUS_COL_TITLE || "Status"; // Look for this column name dynamically
+// Trim values to remove trailing newlines accidentally added by echo
+const MONDAY_API_KEY    = (process.env.MONDAY_API_KEY || "").trim();
+const IN_PROGRESS_LABEL = (process.env.IN_PROGRESS_LABEL || "In Bearbeitung").trim();
+const UPDATE_TEXT       = (process.env.UPDATE_TEXT || "I’ve started working on this ticket.").trim();
+const STATUS_COL_TITLE  = (process.env.STATUS_COL_TITLE || "Status").trim(); 
 // -----------------------------------------------------------------
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
   const payload = req.body || {};
 
-  // ---- 1️⃣ Handle Monday’s webhook registration challenge (POST) ----
   if (payload.challenge) {
     console.log('🔔 Received webhook challenge:', payload.challenge);
     return res.status(200).json({ challenge: payload.challenge });
@@ -21,7 +21,6 @@ export default async function handler(req, res) {
 
   console.log('🔔 Monday webhook payload received');
 
-  // ---- 2️⃣ Extract IDs we need (create_item event) ----
   const event   = payload.event || {};
   const itemId  = event.pulseId || payload.data?.id || event.pulseId;
   const boardId = event.boardId || payload.data?.boardId;
@@ -31,7 +30,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ received: true });
   }
 
-  // ---- 3️⃣ Fetch the exact Status column ID for this specific board ----
   const getColumnsQuery = `query { boards(ids: [${boardId}]) { columns { id title } } }`;
   const colsResp = await fetch('https://api.monday.com/v2', {
     method: 'POST',
@@ -47,7 +45,6 @@ export default async function handler(req, res) {
 
   try {
      const columns = colsData.data.boards[0].columns;
-     // Find a column matching the title (case-insensitive fallback)
      const statusCol = columns.find(c => c.title === STATUS_COL_TITLE || c.title.toLowerCase() === 'status');
      if (statusCol) {
         statusColId = statusCol.id;
@@ -59,7 +56,6 @@ export default async function handler(req, res) {
   if (!statusColId) {
      console.log(`⚠️ No Status column found for board ${boardId}. Skipping status update.`);
   } else {
-     // ---- 4️⃣ Update the Status column ----
      console.log(`✅ Found Status column (${statusColId}) for board ${boardId}. Updating...`);
      const updateStatusQuery = `
        mutation {
@@ -81,7 +77,6 @@ export default async function handler(req, res) {
      if (statusResult.errors) console.error('❌ Failed to update status:', statusResult.errors);
   }
 
-  // ---- 5️⃣ Post an update/comment to the item ----
   const safeUpdate = UPDATE_TEXT.replace(/"/g, '\\"'); // escape double quotes for GraphQL
   const addUpdateQuery = `
     mutation {
@@ -105,6 +100,5 @@ export default async function handler(req, res) {
     console.log('✅ Update posted for item', itemId);
   }
 
-  // ---- 6️⃣ Respond to Monday.com ----
   return res.status(200).json({ received: true, itemId });
 }
