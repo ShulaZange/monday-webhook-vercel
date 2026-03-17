@@ -10,28 +10,29 @@ const UPDATE_TEXT      = process.env.UPDATE_TEXT || "I’ve started working on t
 // -----------------------------------------------------------------
 
 export default async function handler(req, res) {
-  // ---- 1️⃣ Handle Monday’s webhook registration challenge (GET) ----
-  if (req.method === 'GET' && req.query.challenge) {
-    return res.status(200).json({ challenge: req.query.challenge });
-  }
-
-  // ---- 2️⃣ Only accept POSTs – real event payloads ----
+  // Only accept POSTs from Monday.com
   if (req.method !== 'POST') {
     return res.status(405).end(); // Method Not Allowed
   }
 
-  const payload = req.body; // Vercel already parses JSON
+  const payload = req.body || {}; // Vercel already parses JSON
+  
+  // ---- 1️⃣ Handle Monday’s webhook registration challenge (POST) ----
+  if (payload.challenge) {
+    console.log('🔔 Received webhook challenge:', payload.challenge);
+    return res.status(200).json({ challenge: payload.challenge });
+  }
+
   console.log('🔔 Monday webhook payload:', JSON.stringify(payload, null, 2));
 
   // ---- 3️⃣ Extract IDs we need (create_item event) ----
-  const event   = payload.event || '';
-  const data    = payload.data || {};
-  const itemId  = data.id;
-  const boardId = data.boardId;
+  const event   = payload.event || {};
+  const itemId  = event.pulseId || payload.data?.id || event.pulseId;
+  const boardId = event.boardId || payload.data?.boardId;
 
   if (!itemId || !boardId) {
-    console.warn('⚠️ Missing itemId/boardId – nothing to do.');
-    return res.status(200).end(); // still acknowledge receipt
+    console.warn('⚠️ Missing itemId/boardId – nothing to do.', JSON.stringify(payload));
+    return res.status(200).json({ received: true }); // still acknowledge receipt
   }
 
   // ---- 4️⃣ Update the Status column to "In Progress" ----
@@ -41,13 +42,10 @@ export default async function handler(req, res) {
         board_id: ${boardId}
         item_id: "${itemId}"
         column_id: "${STATUS_COL_ID}"
-        value: ${JSON.stringify(JSON.stringify(IN_PROGRESS_LABEL))} 
+        value: ${JSON.stringify(JSON.stringify(IN_PROGRESS_LABEL))}
       ) { id }
     }
   `;
-
-  // Note: For change_simple_column_value, value must be a string containing a JSON string.
-  // Example: value: "\"In Bearbeitung\""
 
   const statusResp = await fetch('https://api.monday.com/v2', {
     method: 'POST',
