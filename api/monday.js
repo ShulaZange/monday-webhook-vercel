@@ -1,21 +1,21 @@
 // ---------------------------------------------------------------
-//  Vercel serverless function – Monday.com webhook receiver (Board-Agnostic)
+//  Vercel serverless function – Monday.com webhook receiver
+//  Queues tasks into GitHub Issues for the local agent (Shula)
 // ---------------------------------------------------------------
 
-// ---- CONFIG ----
-const MONDAY_API_KEY    = (process.env.MONDAY_API_KEY || "").trim();
-const IN_PROGRESS_LABEL = (process.env.IN_PROGRESS_LABEL || "In Bearbeitung").trim();
-const UPDATE_TEXT       = (process.env.UPDATE_TEXT || "I’ve started working on this ticket.").trim();
-// -----------------------------------------------------------------
+const GITHUB_TOKEN = (process.env.GITHUB_TOKEN || "").trim();
+const GITHUB_REPO  = (process.env.GITHUB_REPO || "ShulaZange/monday-webhook-vercel").trim();
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
   const payload = req.body || {};
 
+  // ---- 1️⃣ Handle Monday’s webhook registration challenge ----
   if (payload.challenge) {
     return res.status(200).json({ challenge: payload.challenge });
   }
 
+  // ---- 2️⃣ Extract info ----
   const event   = payload.event || {};
   const itemId  = event.pulseId || payload.data?.id || event.pulseId;
   const boardId = event.boardId || payload.data?.boardId;
@@ -24,82 +24,45 @@ export default async function handler(req, res) {
     return res.status(200).json({ received: true });
   }
 
-  // ---- Fetch all columns and their settings to safely find the correct Status column ----
-  const getColumnsQuery = `query { boards(ids: [${boardId}]) { columns { id title type settings_str } } }`;
-  const colsResp = await fetch('https://api.monday.com/v2', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': MONDAY_API_KEY },
-    body: JSON.stringify({ query: getColumnsQuery }),
-  });
+  console.log(`🔔 Webhook received! Queueing to GitHub -> Board: ${boardId}, Item: ${itemId}`);
 
-  const colsData = await colsResp.json();
-  let statusColId = null;
-  let labelToUse = IN_PROGRESS_LABEL;
+  // ---- 3️⃣ Push this info to GitHub Issues (so Shula can pick it up via cron/polling) ----
+  if (GITHUB_TOKEN) {
+    const issueTitle = `Process Monday Item: ${itemId}`;
+    const issueBody  = `**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n**Event Type:** ${event.type || 'create_item'}\n\n*This issue serves as a queue item. The local agent should process this item and then close this issue.*`;
 
-  try {
-     const columns = colsData.data.boards[0].columns;
-     
-     // 1. Look for a 'color' (status) column that explicitly has our IN_PROGRESS_LABEL
-     const statusCols = columns.filter(c => c.type === 'color' || c.title.toLowerCase().includes('status'));
-     
-     for (const col of statusCols) {
-        if (col.settings_str) {
-            const settings = JSON.parse(col.settings_str);
-            const labels = Object.values(settings.labels || {});
-            
-            if (labels.includes(IN_PROGRESS_LABEL)) {
-                statusColId = col.id;
-                labelToUse = IN_PROGRESS_LABEL;
-                break;
-            } else if (labels.includes("Working on it")) {
-                statusColId = col.id;
-                labelToUse = "Working on it";
-            }
-        }
-     }
+    try {
+      const githubResp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/issues`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${GITHUB_TOKEN}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: issueTitle,
+          body: issueBody,
+          labels: ['monday-webhook', 'pending']
+        }),
+      });
 
-     // Fallback: Just grab the first status column if we couldn't find an exact match
-     if (!statusColId && statusCols.length > 0) {
-         statusColId = statusCols[0].id;
-     }
-  } catch (err) {
-     console.error('❌ Failed to parse columns for board', boardId, err);
-  }
-
-  if (statusColId) {
-     const updateStatusQuery = `
-       mutation {
-         change_simple_column_value(
-           board_id: ${boardId}
-           item_id: "${itemId}"
-           column_id: "${statusColId}"
-           value: ${JSON.stringify(labelToUse)}
-         ) { id }
-       }
-     `;
-     await fetch('https://api.monday.com/v2', {
-       method: 'POST',
-       headers: { 'Content-Type': 'application/json', 'Authorization': MONDAY_API_KEY },
-       body: JSON.stringify({ query: updateStatusQuery }),
-     });
-  }
-
-  // ---- Post update/comment ----
-  const safeUpdate = UPDATE_TEXT.replace(/"/g, '\\"');
-  const addUpdateQuery = `
-    mutation {
-      create_update(
-        item_id: "${itemId}"
-        body: "${safeUpdate}"
-      ) { id }
+      if (!githubResp.ok) {
+        console.error('❌ Failed to create GitHub Issue:', await githubResp.text());
+      } else {
+        const issueData = await githubResp.json();
+        console.log(`✅ Successfully queued info to GitHub Issue #${issueData.number}`);
+      }
+    } catch (err) {
+      console.error('❌ Error hitting GitHub API:', err);
     }
-  `;
+  } else {
+    console.error('⚠️ GITHUB_TOKEN is missing. Cannot save the info to GitHub.');
+  }
 
-  await fetch('https://api.monday.com/v2', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': MONDAY_API_KEY },
-    body: JSON.stringify({ query: addUpdateQuery }),
+  return res.status(200).json({ 
+    received: true, 
+    message: "Info extracted and sent to GitHub queue", 
+    boardId, 
+    itemId 
   });
-
-  return res.status(200).json({ received: true, itemId });
 }
