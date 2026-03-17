@@ -67,7 +67,7 @@ export default async function handler(req, res) {
            board_id: ${boardId}
            item_id: "${itemId}"
            column_id: "${statusColId}"
-           value: ${JSON.stringify(JSON.stringify(IN_PROGRESS_LABEL))}
+           value: ${JSON.stringify(IN_PROGRESS_LABEL)}
          ) { id }
        }
      `;
