@@ -49,9 +49,6 @@ export default async function handler(req, res) {
 
       if (!githubResp.ok) {
         console.error('❌ Failed to create GitHub Issue:', await githubResp.text());
-      } else {
-        const issueData = await githubResp.json();
-        console.log(`✅ Successfully queued info to GitHub Issue #${issueData.number}`);
       }
     } catch (err) {
       console.error('❌ Error hitting GitHub API:', err);
@@ -60,7 +57,8 @@ export default async function handler(req, res) {
 
   // ---- 4️⃣ Ping Discord IMMEDIATELY to wake up the local agent ----
   if (DISCORD_WEBHOOK_URL) {
-    const message = `🚨 **New Monday.com Ticket Queued!**\nHey Shula, please process this item immediately:\n**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n(I also created a GitHub issue as a backup queue.)`;
+    // We MUST use the bot's real Discord User ID to actually trigger OpenClaw to wake up!
+    const message = `🚨 **New Monday.com Trigger!** <@1477060112827940907>\nPlease process this item immediately:\n**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n**Event Type:** ${event.type}`;
 
     try {
       const discordResp = await fetch(DISCORD_WEBHOOK_URL, {
@@ -71,8 +69,6 @@ export default async function handler(req, res) {
 
       if (!discordResp.ok) {
         console.error('❌ Failed to push to Discord:', await discordResp.text());
-      } else {
-        console.log(`✅ Successfully pinged Discord to wake up agent`);
       }
     } catch (err) {
       console.error('❌ Error hitting Discord API:', err);
