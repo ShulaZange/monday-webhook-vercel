@@ -18,19 +18,18 @@ export default async function handler(req, res) {
 
   // ---- 2️⃣ Extract info ----
   const event   = payload.event || {};
-  const itemId  = event.pulseId || payload.data?.id || event.pulseId;
-  const boardId = event.boardId || payload.data?.boardId;
-
-  if (!itemId || !boardId) {
-    return res.status(200).json({ received: true });
-  }
+  // For replies, Monday might not provide pulseId/boardId directly in the same way,
+  // or it might use updateId / replyId. We must catch them all.
+  const itemId  = event.pulseId || event.pulse_id || payload.data?.id || event.updateId || "UNKNOWN_ITEM";
+  const boardId = event.boardId || event.board_id || payload.data?.boardId || "UNKNOWN_BOARD";
+  const isReply = !!(event.replyId || event.reply_id);
 
   console.log(`🔔 Webhook received! Queueing to GitHub -> Board: ${boardId}, Item: ${itemId}`);
 
   // ---- 3️⃣ Push this info to GitHub Issues (as a permanent queue) ----
   if (GITHUB_TOKEN) {
     const issueTitle = `Process Monday Item: ${itemId}`;
-    const issueBody  = `**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n**Event Type:** ${event.type || 'create_item'}\n\n*This issue serves as a queue item. The local agent should process this item and then close this issue.*`;
+    const issueBody  = `**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n**Event Type:** ${event.type || 'unknown'}\n**Is Reply:** ${isReply}\n\n**Raw Event Payload:**\n\`\`\`json\n${JSON.stringify(event, null, 2)}\n\`\`\`\n\n*This issue serves as a queue item. The local agent should process this item and then close this issue.*`;
 
     try {
       const githubResp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/issues`, {
@@ -57,8 +56,7 @@ export default async function handler(req, res) {
 
   // ---- 4️⃣ Ping Discord IMMEDIATELY to wake up the local agent ----
   if (DISCORD_WEBHOOK_URL) {
-    // We MUST use the bot's real Discord User ID to actually trigger OpenClaw to wake up!
-    const message = `🚨 **New Monday.com Trigger!** <@1477060112827940907>\nPlease process this item immediately:\n**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n**Event Type:** ${event.type}`;
+    const message = `🚨 **New Monday.com Trigger!** <@1477060112827940907>\nPlease process this item immediately:\n**Board ID:** ${boardId}\n**Item ID:** ${itemId}\n**Event Type:** ${event.type}\n**Is Reply:** ${isReply}`;
 
     try {
       const discordResp = await fetch(DISCORD_WEBHOOK_URL, {
